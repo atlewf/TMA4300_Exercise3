@@ -1,0 +1,255 @@
+---
+title: "TMA4300 Project 3"
+author: "Atle Wiig-Fisketjøn"
+date: "03.05.2020"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Problem A
+
+## 1
+
+```{r}
+source("https://www.math.ntnu.no/emner/TMA4300/2020v/Exercise/ex3-additionalFiles/probAhelp.R")
+source("https://www.math.ntnu.no/emner/TMA4300/2020v/Exercise/ex3-additionalFiles/probAdata.R")
+
+library("matrixStats")
+n = length(data3A$x) #length of time series
+est = ARp.beta.est(data3A$x, 2)
+beta_LS = est$LS
+beta_LA = est$LA
+
+obs_residuals_LS = ARp.resid(data3A$x, beta_LS) #residuals for t=3,4,..., n
+obs_residuals_LA = ARp.resid(data3A$x, beta_LA) #res for t=3, ..., n, size n-2
+
+B=2000 #number of bootstrap samples
+bootstrap_residuals = matrix(sample(obs_residuals_LS, size=B*(n-2), replace=TRUE), nrow=B, ncol = (n-2)) #store bootstrap in matrix, B samples of size 100
+
+idx = sample(99, B, replace=TRUE)
+idx.matrix = matrix( c(idx, idx+1), nrow = B, ncol = 2) #indexes for random subsequence
+x0 = matrix(data3A$x[idx.matrix], nrow = B, ncol = 2 ) #draw subsequences from data, have B samples with init.values
+
+
+bootstrap_LS = matrix(NA, nrow = B, ncol = 2) #matrices to store bootstrapped estimators
+bootstrap_LA = matrix(NA, nrow = B, ncol = 2)
+
+bootstrap_res_LS = matrix(NA, nrow = B, ncol = n-2) #for storing bootstrapped residuals
+bootstrap_res_LA = matrix(NA, nrow = B, ncol= n-2)
+
+for (i in 1:B) {
+  sample_timeseries_LS = ARp.filter(x0[i,], beta_LS, bootstrap_residuals[i,])
+  sample_timeseries_LA = ARp.filter(x0[i,], beta_LA, bootstrap_residuals[i,])
+  
+  bootstrap_LS[i, ] = ARp.beta.est(sample_timeseries_LS, 2)$LS
+  bootstrap_LA[i, ] = ARp.beta.est(sample_timeseries_LA, 2)$LA
+  
+  bootstrap_res_LS[i,] = ARp.resid(sample_timeseries_LS, bootstrap_LS[i,])
+  bootstrap_res_LA[i,] = ARp.resid(sample_timeseries_LA, bootstrap_LA[i,])
+}
+cat("Bias of beta_LS: ", beta_LS - colMeans(bootstrap_LS), "\n")
+cat("Bias of beta_LA: ", beta_LA - colMeans(bootstrap_LA), "\n") #smaller bias
+cat("Variance of beta_LS: ", colVars(bootstrap_LS), "\n")
+cat("Variance of beta_LA: ", colVars(bootstrap_LA), "\n")
+```
+
+The LS estimator is optimal for Gaussian AR(p) processes. This process is non-Gaussian, and we see that the LA estimator has both smaller bias and smaller variance than the LS estimator.
+
+## 2
+
+We want to compute a $95\%$ prediction interval for $x_{101}$ based on both estimators. We use the bootstrapped time series and parameter estimates from 1). We use the relation $x_{101} = \beta_1 x_{100} + \beta_2 x_{99} + e_{101}$, where $e_{101}$ is drawn from the residual distribution.
+
+```{r}
+x = data3A$x[99:100] #get the last two values from data
+
+#compute beta_1 x_{100} + beta_2 x_{99} for the B samples for both LS and LA
+
+x_pred_LS = bootstrap_LS%*%x
+x_pred_LA = bootstrap_LA%*%x
+
+#add the drawn residuals to each bootstrap sample
+for (i in 1:B){
+  x_pred_LS[i] = x_pred_LS[i] + sample(bootstrap_res_LS[i,], size = 1)
+  x_pred_LA[i] = x_pred_LA[i] + sample(bootstrap_res_LA[i,], size = 1)
+}
+#To find limits in pred interval use quantiles in the simmulated values
+
+#find lower quantile by sorting samples and find value at 2.5%
+LS_lower = sort(x_pred_LS)[round(B*0.025)] 
+LS_upper = sort(x_pred_LS)[round(B*0.975)] #upper quantile
+
+LA_lower = sort(x_pred_LA)[round(B*0.025)] 
+LA_upper = sort(x_pred_LA)[round(B*0.975)]
+
+cat("95% prediction interval for LS: [", LS_lower, ", ", LS_upper, "] \n")
+cat("95% prediction interval for LA: [", LA_lower, ", ", LA_upper, "] \n")
+
+```
+
+
+# Problem B
+
+## 1
+
+```{r}
+bilirubin <- read.table("https://www.math.ntnu.no/emner/TMA4300/2020v/Exercise/ex3-additionalFiles/bilirubin.txt", header=T)
+head(bilirubin)
+
+boxplot(log(meas)~pers, data=bilirubin)
+```
+
+From the boxplot we observe that the median for person 3 is quite different from the medians for person 1 and 2, which are pretty similar. We fit the regression model $log Y_{ij} = \beta_i + \epsilon _{ij}$ for $i = 1,2,3$ and $j = 1, \ldots, n$, where $\epsilon_{ij} \stackrel{iid}\sim \mathcal{N}(0, \sigma^2)$. 
+
+```{r}
+mod1 <- lm(log(meas)~pers, data=bilirubin) 
+summary(mod1)
+
+Fval = summary(mod1)$fstatistic[1]
+pval = anova(mod1)$`Pr(>F)`[1] #to get p-value for model
+```
+
+From the summary output we observe that the p-value for person3 is significant. We also see that the hypothesis test $H_0: \beta_1 = \beta_2 = \beta_3$ vs $H_1: \text{at least one } \beta_i \text{ is different}$ has the F-statistic `r Fval`, with corresponding p-value `r pval`. This means that we reject the null hypothesis, and conclude that the total regression is significant.
+
+
+## 2
+
+The function permTest() generates a permutation of the data between the three individuals, fits the model in $1)$ and returns the value of F-statistic for testing $\beta_1 = \beta_2 = \beta_3$. 
+
+```{r}
+permTest <- function() {
+  newdata <- bilirubin
+  newdata$pers <- sample(bilirubin$pers, size=length(bilirubin$pers), replace=FALSE)
+  return(summary(lm(log(meas)~pers, data=newdata))$fstatistic[1])
+}
+```
+
+## 3
+
+We now perform a permutation test using the function permTest(). We test the hypothesis $H_0$ by generating a sample of size 999 for the F-statistic, and then compute the p-value for Fval using the sample.
+
+```{r}
+fstat_values = rep(NA, 999)
+for (i in (1:999)){
+  fstat_values[i] <- permTest()
+}
+#estimate p-value by number of test statistics >= Fval / B
+cat("p-value: ", sum(fstat_values>=Fval)/999 )
+```
+
+We observe that the estimated p-value is significant, and reject $H_0$. We conclude that the total regression is significant.
+
+# Problem C
+
+Let $x_1, \ldots, x_n$ and $y_1, \ldots, y_n$ be independent random variables, where $x_i \sim \text{Exp}(\lambda_0)$ and $y_i \sim \text{Exp}(\lambda_1)$. We assume that we do not observe $x_1, \ldots, x_n, y_1, \ldots, y_n$ directly, but observe 
+$$
+z_i = \text{max}(x_i, y_i) \quad \text{for } i=1, \ldots, n\\
+u_i = I(x_i \geq y_i) \quad \text{for } i=1, \ldots, n,
+$$
+where $I()$ is the indicator function. We will use the EM algorithm to find the MLE's of $(\lambda_0, \lambda_1)$.
+
+## 1
+
+We have that $f(x_i)=\lambda_0 e^{-\lambda_0 x_i}$ and $f(y_i) = \lambda_1 e^{-\lambda_1 y_i}$. The independency assumption gives joint pdf $f(x_i, y_i) = \lambda_0 \lambda_1 e^{-\lambda_0 x_i} e^{- \lambda_1 y_i}$. The likelihood function is then
+$$
+f(\mathbf{x},\mathbf{y} \lvert \lambda_0, \lambda_1) = \prod_{i=1}^{n} f(x_i, y_i \lvert \lambda_0, \lambda_1) = (\lambda_0 \lambda_1)^n e^{-\lambda_0 \sum_{i=1}^n x_i} e^{-\lambda_1 \sum_{i=1}^n y_i},
+$$
+
+giving the loglikelihood
+
+$$
+\ln f(\mathbf{x}, \mathbf{y} \lvert \lambda_0, \lambda_1) = n (\ln \lambda_0 + \ln \lambda_1) -\lambda_0 \sum_{i=1}^n x_i   -\lambda_1 \sum_{i=1}^n y_i.
+$$
+
+We want the expected value
+
+
+\begin{align*} E [ \ln f(\mathbf{x}, \mathbf{y} \lvert \lambda_0, \lambda_1) \lvert z, u, \lambda_0^{(t)}, \lambda_1^{(t)}] &= n (\ln \lambda_0 + \ln \lambda_1)  \\
+& -\lambda_0 \sum_{i=1}^nE[x_i \lvert z_i, u_i, \lambda_0^{(t)}, \lambda_1^{(t)} ] \\
+& -\lambda_1 \sum_{i=1}^n E[y_i, \lvert z_i, u_i, \lambda_0^{(t)}, \lambda_1^{(t)}],
+\end{align*}
+
+
+and must therefore compute the conditional probability density functions for $x_i$ and $y_i$. They are given by
+
+$$
+f(x_i \lvert z_i, u_i, \lambda_0^{(t)}, \lambda_1^{(t)}) = \left. \begin{cases}\frac{\lambda_0^{(t)} \exp \{ -\lambda_0^{(t)} x_i \}}{1 - \exp \{-\lambda_0^{(t)} z_i \}} \quad &\text{for } u_i = 0 \\
+z_i \quad &\text{for } u_i = 1
+\end{cases} \right\} = u_i z_i + (1-u_i)\frac{\lambda_0^{(t)} \exp \{ -\lambda_0^{(t)} x_i \}}{1 - \exp \{-\lambda_0^{(t)} z_i \}},
+$$
+
+and
+
+$$
+f(y_i \lvert z_i, u_i, \lambda_0^{(t)}, \lambda_1^{(t)}) = \left. \begin{cases}z_i \quad &\text{for }u_i = 0 \\
+\frac{\lambda_1^{(t)} \exp \{ -\lambda_1^{(t)} y_i \}}{1 - \exp \{-\lambda_1^{(t)} z_i \}} \quad & \text{for } u_i = 1
+\end{cases} \right\} =  (1-u_i)z_i + u_i \frac{\lambda_1^{(t)} \exp \{ -\lambda_1^{(t)} y_i \}}{1 - \exp \{-\lambda_1^{(t)} z_i \}}.
+$$
+
+We compute the expectations
+
+$$ 
+E[x_i \lvert z_i, u_i, \lambda_0^{(t)}, \lambda_1^{(t)}] = u_i z_i + (1-u_i) \int_0^{z_i} x_i \frac{\lambda_0^{(t)} \exp \{ -\lambda_0^{(t)} x_i \}}{1 - \exp \{-\lambda_0^{(t)} z_i \}} dx_i 
+\\ = u_i z_i + (1 - u_i) \bigg (\frac{1}{\lambda_0^{(t)}} - \frac{z_i}{\exp\{\lambda_0^{(t)} z_i\} - 1} \bigg),
+$$
+
+and
+
+$$
+E[y_i \lvert z_i, u_i, \lambda_0^{(t)}, \lambda_1^{(t)}] = (1-u_i) z_i + u_i \int_0^{z_i} y_i \frac{\lambda_1^{(t)} \exp \{ -\lambda_1^{(t)} y_i \}}{1 - \exp \{-\lambda_1^{(t)} z_i \}} dy_i 
+\\ = (1-u_i) z_i + u_i \bigg (\frac{1}{\lambda_1^{(t)}} - \frac{z_i}{\exp\{\lambda_1^{(t)} z_i\} - 1} \bigg).
+$$
+
+This finally yields the expteced value
+
+
+\begin{align*}
+E[ \ln f(\mathbf{x}, \mathbf{y} \lvert \lambda_0, \lambda_1) \lvert \mathbf{z}, \mathbf{u}, \lambda_0^{(t)}, \lambda_1^{(t)}] 
+&=  n (\ln \lambda_0 + \ln \lambda_1) \\ 
+&-\lambda_0 \sum_{i=1}^n \left[ u_i z_i + (1 - u_i) \left (\frac{1}{\lambda_0^{(t)}} - \frac{z_i}{\exp\{\lambda_0^{(t)} z_i\} - 1} \right) \right] \\
+&- \lambda_1 \sum_{i=1}^n  \left[ (1-u_i) z_i + u_i \left (\frac{1}{\lambda_1^{(t)}} - \frac{z_i}{\exp\{\lambda_1^{(t)} z_i\} - 1} \right) \right].
+\end{align*}
+
+
+## 2
+
+We will now use the EM algorithm to find a recursion in $\lambda_0^{(t)}, \lambda_1^{(t)}$ for finding the MLE for $(\lambda_0, \lambda_1)$. 
+Define the function $Q(\lambda_0, \lambda_1 \lvert \lambda_0^{(t)}, \lambda_1^{(t)}) = E[ \ln f(\mathbf{x}, \mathbf{y} \lvert \lambda_0, \lambda_1) \lvert \mathbf{z}, \mathbf{u}, \lambda_0^{(t)}, \lambda_1^{(t)}]$, and find the maxium by solving
+
+$$
+\frac{\partial Q}{\partial \lambda_0} = 0, \\
+\frac{\partial Q}{\partial \lambda_1}= 0,
+$$
+
+for $\lambda_0$ and $\lambda_1$ respectively. This gives the recursion
+
+\begin{align*}
+\lambda_0^{(t+1)} &= \frac{n}{\sum_{i=1}^n u_i z_i + (1 - u_i) \bigg (\frac{1}{\lambda_0^{(t)}} - \frac{z_i}{\exp{\lambda_0^{(t)} z_i} - 1} \bigg)}, \\
+\lambda_1^{(t+1)} &= \frac{n}{\sum_{i=1}^n  (1-u_i) z_i + u_i \bigg (\frac{1}{\lambda_1^{(t)}} - \frac{z_i}{\exp\{\lambda_1^{(t)} z_i\} - 1} \bigg)}.
+\end{align*}
+
+We implement the EM algorithm:
+
+```{r}
+u = read.table("https://www.math.ntnu.no/emner/TMA4300/2020v/Exercise/ex3-additionalFiles/u.txt")
+z = read.table("https://www.math.ntnu.no/emner/TMA4300/2020v/Exercise/ex3-additionalFiles/z.txt")
+
+n = length(u)
+iter = 10 #number of iterations
+lambda = matrix(NA, nrow=iter, ncol = 2) 
+lambda[1,] = c(1, 1) #defining start values for lambda_0 and lambda_1
+for(i in 2:iter){
+  lambda[i, 1] = n / sum(u*z + (1-u)*(1/lambda[i-1, 1] - z / (exp(lambda[i-1, 1]*z) - 1)))
+  lambda[i, 2] = n / sum((1-u)*z + u*(1/lambda[i-1, 2] - z / (exp(lambda[i-1, 2]*z) - 1)))
+}
+lambda_MLE= lambda[iter,] #extract the final values for lambda_0 and lambda_1
+plot(seq(1:iter), lambda[,1], type="l", col = "red", xlab = 'iterations', ylab = 'lambda')
+lines(seq(1:iter), lambda[,2], type="l", lty="dashed", col="blue")
+legend("topright", legend=c("lambda_0", "lambda_1"), col=c("red", "blue"), lty=1:2)
+``` 
+
+We observe that the algorithm converges after only 2-3 steps, and find the maximum likelihood estimators for $(\lambda_0, \lambda_1)$ to be (`r lambda_MLE[1]`, `r lambda_MLE[2]`). 
